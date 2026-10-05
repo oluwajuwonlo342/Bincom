@@ -1,0 +1,74 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>Bincom Election Results</title>
+<style>
+body{font-family:system-ui,sans-serif;background:#f4f6f8;margin:0;color:#222}
+header{background:#0b5d3b;color:#fff;padding:16px 24px}
+nav{display:flex;gap:4px;padding:12px 24px 0}
+nav button{border:0;padding:10px 16px;border-radius:8px 8px 0 0;background:#dde3e8;cursor:pointer;font-size:15px}
+nav button.on{background:#fff;font-weight:600}
+main{background:#fff;margin:0 24px;padding:24px;border-radius:0 8px 8px 8px;max-width:720px}
+label{display:block;margin:12px 0 4px;font-weight:600;font-size:14px}
+select,input{width:100%;padding:10px;border:1px solid #bbb;border-radius:6px;font-size:15px;box-sizing:border-box}
+select:disabled{background:#eee}
+button.go{margin-top:16px;padding:10px 20px;background:#0b5d3b;color:#fff;border:0;border-radius:6px;font-size:15px;cursor:pointer}
+table{width:100%;border-collapse:collapse;margin-top:16px}
+th,td{padding:8px 10px;border-bottom:1px solid #e3e3e3;text-align:left}
+th{background:#f0f3f5}.msg{margin-top:12px;padding:10px;border-radius:6px}
+.ok{background:#e3f6e9}.err{background:#fde6e6}.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px 16px}
+.tab{display:none}.tab.on{display:block}
+</style></head><body>
+<header><h1 style="margin:0;font-size:20px">Delta State – 2011 Election Results</h1></header>
+<nav id="nav"><button data-t="t1" class="on">1. Polling Unit</button><button data-t="t2">2. LGA Total</button><button data-t="t3">3. Add Result</button></nav>
+<main>
+<section id="t1" class="tab on">
+  <div id="c1"></div><div id="r1"></div>
+</section>
+<section id="t2" class="tab">
+  <label>Local Government</label><select id="lga2"></select><div id="r2"></div>
+</section>
+<section id="t3" class="tab">
+  <div id="c3"></div>
+  <label>New polling unit name *</label><input id="name3">
+  <label>Polling unit number</label><input id="num3">
+  <label>Entered by</label><input id="by3" placeholder="Your name">
+  <h3>Party scores *</h3><div class="grid" id="parties"></div>
+  <button class="go" id="save">Save result</button><div id="m3"></div>
+</section>
+</main>
+<script>
+const $=id=>document.getElementById(id),api=u=>fetch(u).then(r=>r.json());
+const opts=(el,rows,v,t,ph)=>{el.innerHTML=`<option value="">${ph}</option>`+rows.map(r=>`<option value="${r[v]}" data-u="${r.uniqueid||''}">${r[t]}</option>`).join('');el.disabled=false};
+// Build LGA > Ward > (Polling unit) chained selects inside a container
+function chain(box,withPU,onPU){
+  box.innerHTML=`<label>Local Government</label><select class="l"></select>
+  <label>Ward</label><select class="w" disabled><option>Select LGA first</option></select>`+
+  (withPU?`<label>Polling Unit</label><select class="p" disabled><option>Select ward first</option></select>`:'');
+  const [l,w,p]=box.querySelectorAll('select');
+  api('/api/lgas').then(d=>opts(l,d,'lga_id','lga_name','-- Select LGA --'));
+  l.onchange=()=>{w.disabled=true;if(p)p.disabled=true;if(!l.value)return;
+    api('/api/wards?lga_id='+l.value).then(d=>opts(w,d,'ward_id','ward_name','-- Select Ward --'))};
+  w.onchange=()=>{if(!p||!w.value)return;
+    api(`/api/polling-units?lga_id=${l.value}&ward_id=${w.value}`).then(d=>opts(p,d.map(x=>({...x,n:x.polling_unit_name||x.polling_unit_number||'Unit '+x.uniqueid})),'uniqueid','n','-- Select Polling Unit --'))};
+  if(p)p.onchange=()=>onPU(p.value);
+  return{l,w,p};
+}
+const table=(rows,k,v)=>rows.length?`<table><tr><th>Party</th><th>Score</th></tr>${rows.map(r=>`<tr><td>${r[k]}</td><td>${r[v]}</td></tr>`).join('')}</table>`:'<p>No results found.</p>';
+chain($('c1'),true,id=>{if(!id)return;api('/api/results/pu/'+id).then(d=>$('r1').innerHTML=table(d,'party_abbreviation','party_score'))});
+api('/api/lgas').then(d=>{opts($('lga2'),d,'lga_id','lga_name','-- Select LGA --')});
+$('lga2').onchange=e=>{if(!e.target.value)return $('r2').innerHTML='';
+  api('/api/results/lga/'+e.target.value).then(d=>$('r2').innerHTML=table(d,'party_abbreviation','total')+
+  `<p><b>Total votes: ${d.reduce((s,r)=>s+ +r.total,0)}</b></p>`)};
+const c3=chain($('c3'),false);
+api('/api/parties').then(d=>$('parties').innerHTML=d.map(p=>`<div><label>${p.partyid}</label><input type="number" min="0" data-p="${p.partyid}" value="0"></div>`).join(''));
+$('save').onclick=async()=>{
+  const m=$('m3'),show=(t,c)=>m.innerHTML=`<div class="msg ${c}">${t}</div>`;
+  if(!c3.l.value||!c3.w.value||!$('name3').value.trim())return show('Select LGA, ward and enter a polling unit name.','err');
+  const scores={};document.querySelectorAll('[data-p]').forEach(i=>scores[i.dataset.p]=i.value||0);
+  const r=await fetch('/api/polling-units',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({
+    lga_id:c3.l.value,ward_id:c3.w.value,ward_uniqueid:c3.w.selectedOptions[0].dataset.u,
+    name:$('name3').value.trim(),number:$('num3').value,entered_by:$('by3').value,scores})});
+  const j=await r.json();r.ok?show('Saved! Polling unit ID '+j.uniqueid,'ok'):show(j.error,'err');
+};
+$('nav').onclick=e=>{const t=e.target.dataset.t;if(!t)return;
+  document.querySelectorAll('.tab,nav button').forEach(x=>x.classList.remove('on'));$(t).classList.add('on');e.target.classList.add('on')};
+</script></body></html>
